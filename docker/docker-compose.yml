@@ -1,0 +1,12 @@
+services:
+  nginx:
+    image: nginx:alpine
+    network_mode: bridge
+    cpus: 2
+    environment:
+    - NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE=1
+    volumes:
+    - ./nginx:/etc/nginx/conf.d:ro
+    - ./files:/usr/share/nginx/files:ro
+    ports:
+    - 8080:80
