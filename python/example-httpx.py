@@ -1,5 +1,4 @@
 
-import io
 import httpx
 from http import HTTPStatus
 from base import HTTPIO
@@ -12,19 +11,11 @@ class HTTPXIO(HTTPIO):
         elif resp.status_code == HTTPStatus.FORBIDDEN:
             raise PermissionError(error_str)
 
-    def _range_header(self, length:int = -1):
-        point = self.tell()
-        if length == -1:
-            return {'Range': f'bytes={point}-'}
-        else:
-            # -1 for range start at 0
-            ## https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Range#single_byte_ranges_and_cors-safelisted_requests
-            return {'Range': f'bytes={point}-{point+length-1}'}
-
     def __init__(self, url:str, client:httpx.Client|None = None) -> None:
-        self.__client = client or httpx.Client()
-        resp          = self.__client.head(url) # head file for infomation
-        self.__url    = resp.url                 # get url after follow redirects
+        self.__can_close = client is None
+        self.__client    = client or httpx.Client()
+        resp             = self.__client.head(url) # head file for infomation
+        self.__url       = resp.url                 # get url after follow redirects
         super().__init__(str(resp.url))
         error_str = f'{resp.status_code} {resp.reason_phrase}: {self.name}'
         self._map_io_error(resp)
@@ -32,59 +23,57 @@ class HTTPXIO(HTTPIO):
             resp.raise_for_status()
             raise RuntimeError(error_str)
         try:    self.length = int(resp.headers.get('Content-Length'))
-        except: self.length = -1
+        except: self.length 
+        
+    def close(self):
+        if self.__can_close:
+            self.__client.close()
+        return super().close()
 
-    def read(self, length: int = -1) -> bytes:
-        '''
-        main read function
-        '''
-        if self.closed:
-            raise ValueError('I/O operation on closed file.')
-        resp = self.__client.get(
-            url     = self.__url,
-            headers = self._range_header(length)
-        )
-        if resp.status_code == HTTPStatus.RANGE_NOT_SATISFIABLE:
-            return b''
-        self._map_io_error(resp)
-        l = len(resp.content)
-        self.seek(l, io.SEEK_CUR)
-        if length > 0 and l < length:
-            self.length = self.tell()
-        return resp.content
+    def http_range_read(self, start, end = -1):
+        get_range = (start, end if end > 0 else '')
+        with self.__client.stream(method = 'GET', url = self.__url, headers = {'Range': 'bytes=%s-%s' % get_range}) as resp:
+            if resp.status_code == HTTPStatus.RANGE_NOT_SATISFIABLE:
+                return b'', 0
+            elif resp.status_code == HTTPStatus.PARTIAL_CONTENT:
+                data = resp.read()
+                return data, len(data)
+            else:
+                raise EOFError
 
-IO_BUFFER = 1 * 1024** 2 # 1MiB
+# IO_BUFFER = 1 * 1024** 2 # 1MiB
 
-import random
-import zipfile
+# import random
+# import zipfile
+# import io
 
-client = httpx.Client(http2=True)
+# client = httpx.Client(http2=True)
 
-with HTTPXIO('http://localhost:8080/test.zip', client) as hf:
-    with zipfile.ZipFile(hf) as f:
-        zlist = f.infolist()
-        random.shuffle(zlist)
-        for zf in zlist:
-            with f.open(zf) as i:
-                print('zip', 'unbuffed', zf.filename, len(i.read()))
-    hf.seek(0,0)
-    bf = io.BufferedReader(hf, IO_BUFFER)
-    with zipfile.ZipFile(bf) as f:
-        zlist = f.infolist()
-        random.shuffle(zlist)
-        for zf in zlist:
-            with f.open(zf) as i:
-                print('zip', 'buffed', zf.filename, len(i.read()))
+# with HTTPXIO('http://localhost:8080/test.zip', client) as hf:
+#     with zipfile.ZipFile(hf) as f:
+#         zlist = f.infolist()
+#         random.shuffle(zlist)
+#         for zf in zlist:
+#             with f.open(zf) as i:
+#                 print('zip', 'unbuffed', zf.filename, len(i.read()))
+#     hf.seek(0,0)
+#     bf = io.BufferedReader(hf, IO_BUFFER)
+#     with zipfile.ZipFile(bf) as f:
+#         zlist = f.infolist()
+#         random.shuffle(zlist)
+#         for zf in zlist:
+#             with f.open(zf) as i:
+#                 print('zip', 'buffed', zf.filename, len(i.read()))
 
-import tarfile
-with HTTPXIO('http://localhost:8080/test.tar.gz', client) as hf:
-    with tarfile.open(fileobj=hf, mode='r:gz') as f:
-        for file in f:
-            i = f.extractfile(file) 
-            print('tar.gz', 'unbuffed', file.name, len(i.read()) if i is not None else 0)
-    hf.seek(0,0)
-    bf = io.BufferedReader(hf, IO_BUFFER)
-    with tarfile.open(fileobj=bf, mode='r:gz') as f:
-        for file in f:
-            i = f.extractfile(file) 
-            print('tar.gz', 'buffed', file.name, len(i.read()) if i is not None else 0)
+# import tarfile
+# with HTTPXIO('http://localhost:8080/test.tar.gz', client) as hf:
+#     with tarfile.open(fileobj=hf, mode='r:gz') as f:
+#         for file in f:
+#             i = f.extractfile(file) 
+#             print('tar.gz', 'unbuffed', file.name, len(i.read()) if i is not None else 0)
+#     hf.seek(0,0)
+#     bf = io.BufferedReader(hf, IO_BUFFER)
+#     with tarfile.open(fileobj=bf, mode='r:gz') as f:
+#         for file in f:
+#             i = f.extractfile(file) 
+#             print('tar.gz', 'buffed', file.name, len(i.read()) if i is not None else 0)

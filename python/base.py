@@ -1,6 +1,7 @@
 
 import io
 import errno
+from abc import abstractmethod
 
 class HTTPIO(io.RawIOBase):
     def __init__(self, name:str) -> None:
@@ -52,6 +53,22 @@ class HTTPIO(io.RawIOBase):
     # 流文件回报不支持seek
     def seekable(self) -> bool:
         return self.__length > 0
+
+    @abstractmethod
+    def http_range_read(self, start:int, end:int = -1) -> tuple[bytes, int]:
+        raise NotImplemented
+
+    def read(self, n: int = -1) -> bytes:
+        if self.closed:
+            raise ValueError('I/O operation on closed file.')
+        if n == 0: # 如果读0，那就直接返回空
+            return b''
+        end = n
+        if n > 0:  # 如果有限制长度
+            end = self.__point + n - 1 # 设置结尾为 偏移量+长度-1
+        data, length = self.http_range_read(self.__point, end)
+        self.__point += length
+        return data
 
     def readinto(self, buffer):
         data = self.read(len(buffer))
